@@ -26,19 +26,19 @@ print(f"{ss_problem.idx_dict=}")
 print(f"{ss_problem.n_states=}")
 print(f"{ss_problem.dims=}")
 # %%
-ss_problem.create_h_int_sspin()
+ss_problem._create_h_int_sspin()
 # print(np.diag(ss_problem.h_int_sspin.toarray()))
 
 # %%
 
 Z_list = [1.0 for i in range(ss_problem.n_states)] 
-lambdas_list = [1.0*0 for i in range(ss_problem.n_states)] 
+lambdas_list = [1.0 for i in range(ss_problem.n_states)] 
 occup_list = [0.5 for i in range(ss_problem.n_states)] 
 avg_en_list = [-0.21221 for i in range(ss_problem.n_states)]
 
 
 
-ss_problem.create_h_kin_sspin(Z_list=Z_list,
+ss_problem._create_h_kin_sspin(Z_list=Z_list,
                               avg_en_list=avg_en_list,
                               lambdas_list=lambdas_list,
-                              occup_list=occup_list)
+                              occup_list=occup_list).toarray()
