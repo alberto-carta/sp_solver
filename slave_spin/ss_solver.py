@@ -2,13 +2,15 @@ from sp_solver.solver import AbstractSubsidiaryProblem
 from sp_solver.slave_spin.ss_structures import bit_test_spin, gen_Z_op
 from sp_solver.slave_spin.ss_utils import schwinger_dressing, fermi_dist, avg_val
 from scipy import sparse 
+from copy import deepcopy
 from scipy.optimize import root 
+
 
 import numpy as np
 
 class SlaveSpinSolver(AbstractSubsidiaryProblem):
 
-    def __init__(self, h_int, gf_struct, sigma_guess=None):
+    def __init__(self, h_int, gf_struct,beta=400, sigma_guess=None):
         super().__init__(h_int, gf_struct, sigma_guess)
         
         """
@@ -30,7 +32,34 @@ class SlaveSpinSolver(AbstractSubsidiaryProblem):
         self.Z_dag_list = [sparse.csr_matrix(gen_Z_op(0, n_states= self.n_states, idx=i)) for i in range(self.n_states)]
         self.Z_op_list = [Z_op.transpose(copy=True) for Z_op in self.Z_dag_list]
         self.N_list = [self.Z_op_list[iz].dot(self.Z_dag_list[iz]) for iz, _ in enumerate(self.Z_dag_list)]
+
+        ####parameters initialized to None
+        ########################################
+        # average energy of the fermions
+        self.avg_en_list = None  
+        # guess variables that get updated at every iteration
+        self.lambdas_guess_list = None 
+        self.Z_guess_list = None 
+        # results of the solver
+        self.lambdas_list = None 
+        self.lambdas_kinetic_list = None 
+        self.occup_list = None 
+        self.Z_list = None
+        ######################################### 
+
+        #other
+        self.beta=beta
+        self.diag_method = 'numpy'
+        self.num_eigvals = 10
     
+    def update_guesses(self, **kwargs):
+        allowed_args = {'avg_en_list', 'lambdas_guess_list', 'occup_list', 'Z_guess_list'}
+        for key in kwargs:
+            value = kwargs[key]
+            if key in allowed_args:
+                self.__setattr__(key, value)
+            else:
+                raise ValueError(f"SP_SOLVER-Slavespin: Trying to set forbidden key '{key}' in slave problem, please select one of the following: {allowed_args}") 
 
 
 
@@ -66,7 +95,7 @@ class SlaveSpinSolver(AbstractSubsidiaryProblem):
         
             h_int_sspin += coeff*h_int_term
             if in_place:
-                self.h_kin_sspin = h_int_sspin
+                self.h_int_sspin = h_int_sspin
         return h_int_sspin
     
     def _create_h_kin_sspin(self, avg_en_list, Z_list, lambdas_list, occup_list, in_place=False):
@@ -96,41 +125,92 @@ class SlaveSpinSolver(AbstractSubsidiaryProblem):
             self.h_kin_sspin = h_kin_sspin
         return h_kin_sspin
 
-    # def _create_h_sspin(self):
+    def _create_h_sspin(self,avg_en_list, Z_list, lambdas_list, occup_list,  in_place=False ):
+        h_kin_sspin = self._create_h_kin_sspin(avg_en_list, Z_list, lambdas_list, occup_list, in_place=in_place)
+        h_int_sspin = self._create_h_int_sspin(in_place=in_place)
+        h_sspin = h_kin_sspin + h_int_sspin
+        if in_place:
+            self.h_sspin = h_sspin
+        return h_sspin
+    
+    
 
-    def diagonalize_h(self, lambdas_list):
-        H_free = create_single_part_term(Z_list, lambdas_list, avg_en_list) 
-        H_int = h_int_sspin
-        H_tot =  (H_free+H_int).toarray()
+
+    def diagonalize_h(self, method = "scipy", n_eigs=10, in_place = False):
         
-        eigvals, eigvecs = np.linalg.eigh(H_tot)
-        eigvals = eigvals-min(eigvals) #for boltzmann normalization
+        if method == 'numpy':
+            H_tot =  self.h_sspin.toarray()
+            eigvals, eigvecs = np.linalg.eigh(H_tot)
+        elif method == 'scipy':
+            H_tot =  self.h_sspin
+            eigvals, eigvecs = sparse.linalg.eigsh(self.h_sspin, k=n_eigs, which = 'SA')
 
-        return H_tot, eigvals, eigvecs
+        if in_place:
+            self.eigvals = eigvals
+            self.eigvecs = eigvecs
+        return eigvals, eigvecs
 
-    def evaluate_constraint(self, lambdas_list, n_fermions):
+    def _evaluate_constraint(self, eigvals, eigvecs):
         """
         Evaluates the difference between the average number of
         bosons and fermions to enforce the constraint equation
         """
-        _, eigvals, eigvecs = diagonalize_h(lambdas_list)
-        n_op_list = N_list
+        n_op_list = self.N_list
 
         # n_bosons = np.array([avg_grnd(n_op, eigvals, eigvecs, parameters) for n_op in n_op_list]) 
-        n_bosons = np.array([avg_val(n_op.toarray(), eigvals, eigvecs, beta=400) for n_op in n_op_list]) 
-        n_fermions = np.array(n_fermions)
+        n_bosons = np.array([avg_val(n_op.toarray(), eigvals, eigvecs, beta=self.beta) for n_op in n_op_list]) 
+        n_fermions = np.array(self.occup_list)
 
         return n_bosons-n_fermions
+    
 
-    def find_lambdas(self, lambdas_guess, n_fermions):
+
+    def find_lambdas(self, Z_list=None, update_guess=True):
         """
         Partial evaluation of the costrain n function to accept the state parameters 
         and finds for which lambdas the costrain is satisfied
 
         look if worth putting method
         """
-        
-        solution = root(lambda x: self.evaluate_constraint(x, n_fermions), lambdas_guess, method='krylov', tol=10e-5)
+    # def _create_h_sspin(self,avg_en_list, Z_list, lambdas_list, occup_list,  in_place=False ):
+        if Z_list is None:
+            print("Setting guess to Z_list in slave_spin solver")
+            Z_list = deepcopy(self.Z_guess_list)
+        def constraint_equation(lambdas_guess):
+            self._create_h_sspin(
+                avg_en_list=self.avg_en_list,
+                Z_list= Z_list,
+                occup_list=self.occup_list,
+                lambdas_list = lambdas_guess,
+                in_place=True)
+            self.diagonalize_h(in_place=True, method=self.diag_method)
+            return self._evaluate_constraint(self.eigvals, self.eigvecs)
+
+
+        solution = root(constraint_equation, self.lambdas_guess_list, method='krylov', tol=10e-5)
+
+        self.lambdas_list = solution.x
+        if update_guess:
+            self.lambdas_guess_list = deepcopy(solution.x)
         return solution.x, solution.success, solution.message
+    
+    def iterate_solver(self, Z_guess_list):
+        
+        def dressing(iflavor):
+            n_occup = self.occup_list[iflavor]
+            P_plus_up = schwinger_dressing(n_occup-0.5)
+            P_minus_up = schwinger_dressing(n_occup-0.5, sign=1)
+            dress_up = P_minus_up*P_plus_up
+            return dress_up
+        
+        lambdas, _, _ = self.find_lambdas(Z_guess_list)
+        Z_new_list = np.array([dressing(iflavor)*avg_val(z_op.toarray(), self.eigvals, self.eigvecs, beta=self.beta) for iflavor, z_op in enumerate(self.Z_op_list)])
+
+        
+
+        
+        return Z_new_list
+
+        
     def solve(self):
         return 1

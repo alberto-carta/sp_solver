@@ -14,6 +14,7 @@ def schwinger_dressing(Sz_avg, sign =0, delta = 0.000001):
     return P_avg1
 
 def avg_val(Op,eigvals, eigvecs, beta):
+    eigvals = eigvals-min(eigvals)
     boltz = np.diag([np.exp(-beta*eig) for eig in eigvals])
     O_eig_basis = np.matmul(np.transpose(eigvecs), np.matmul(Op, eigvecs))
     z_partition =  np.trace(boltz)

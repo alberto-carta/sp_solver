@@ -42,3 +42,28 @@ ss_problem._create_h_kin_sspin(Z_list=Z_list,
                               avg_en_list=avg_en_list,
                               lambdas_list=lambdas_list,
                               occup_list=occup_list).toarray()
+# %%
+ss_problem.update_guesses(lambdas_guess_list=lambdas_list,
+                                    Z_guess_list = Z_list,
+                                    occup_list = occup_list,
+                                    avg_en_list = avg_en_list,
+)
+ss_problem._create_h_sspin(
+    avg_en_list=ss_problem.avg_en_list,
+    Z_list=ss_problem.Z_guess_list,
+    occup_list=ss_problem.occup_list,
+    lambdas_list =ss_problem.lambdas_guess_list, in_place=True)
+# print(ss_problem.h_kin_sspin)
+# print(ss_problem.h_int_sspin)
+print(ss_problem.h_sspin)
+# %%
+ss_problem.diagonalize_h(method="scipy")
+# print(ss_problem.eigvals)
+
+
+# %%
+ss_problem.find_lambdas()
+
+# %%
+ss_problem.iterate_solver(Z_guess_list=Z_list)
+# %%
